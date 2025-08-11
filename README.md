@@ -27,3 +27,6 @@ Git チーム開発学習用のシンプルなTodoアプリケーションです
 ```bash
 git clone https://github.com/[あなたのユーザー名]/simple-todo-app.git
 cd simple-todo-app
+
+## 第3章テスト
+ブランチ機能のテスト中です。
