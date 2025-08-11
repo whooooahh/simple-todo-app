@@ -1,8 +1,9 @@
-// Todoアプリのメイン機能
+// Todoアプリのメイン機能（優先度機能付き）
 class SimpleTodoApp {
     constructor() {
         this.todos = [];
         this.todoInput = document.getElementById('todoInput');
+        this.prioritySelect = document.getElementById('prioritySelect');
         this.addBtn = document.getElementById('addBtn');
         this.todoList = document.getElementById('todoList');
         
@@ -32,6 +33,7 @@ class SimpleTodoApp {
         const todo = {
             id: Date.now(),
             text: text,
+            priority: this.prioritySelect.value,
             completed: false,
             createdAt: new Date()
         };
@@ -55,6 +57,29 @@ class SimpleTodoApp {
         }
     }
     
+    // 優先度の表示アイコンを取得
+    getPriorityIcon(priority) {
+        const icons = {
+            high: '🔴',
+            medium: '🟡',
+            low: '🟢'
+        };
+        return icons[priority] || '⚪';
+    }
+    
+    // 優先度順でソート
+    sortTodosByPriority(todos) {
+        const priorityOrder = { high: 3, medium: 2, low: 1 };
+        return [...todos].sort((a, b) => {
+            // 完了状態で分ける（未完了が上）
+            if (a.completed !== b.completed) {
+                return a.completed - b.completed;
+            }
+            // 優先度でソート（高い方が上）
+            return priorityOrder[b.priority] - priorityOrder[a.priority];
+        });
+    }
+    
     renderTodos() {
         if (this.todos.length === 0) {
             this.todoList.innerHTML = `
@@ -66,30 +91,31 @@ class SimpleTodoApp {
             return;
         }
         
-        this.todoList.innerHTML = this.todos
+        const sortedTodos = this.sortTodosByPriority(this.todos);
+        
+        this.todoList.innerHTML = sortedTodos
             .map(todo => `
-                <li class="todo-item ${todo.completed ? 'todo-completed' : ''}">
-                    <span class="todo-text">${this.escapeHtml(todo.text)}</span>
+                <li class="todo-item ${todo.completed ? 'completed' : ''}" data-id="${todo.id}" data-priority="${todo.priority}">
+                    <div class="todo-content">
+                        <span class="priority-icon">${this.getPriorityIcon(todo.priority)}</span>
+                        <span class="todo-text">${todo.text}</span>
+                        <span class="todo-date">${todo.createdAt.toLocaleDateString()}</span>
+                    </div>
                     <div class="todo-actions">
-                        <button class="btn complete-btn" onclick="app.toggleTodo(${todo.id})">
-                            ${todo.completed ? '✓' : '○'}
+                        <button class="toggle-btn" onclick="app.toggleTodo(${todo.id})">
+                            ${todo.completed ? '↩️ 戻す' : '✅ 完了'}
                         </button>
-                        <button class="btn delete-btn" onclick="app.deleteTodo(${todo.id})">
-                            🗑️
+                        <button class="delete-btn" onclick="app.deleteTodo(${todo.id})">
+                            🗑️ 削除
                         </button>
                     </div>
                 </li>
-            `)
-            .join('');
-    }
-    
-    // XSS対策
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+            `).join('');
     }
 }
 
-// アプリケーションの開始
-const app = new SimpleTodoApp();
+// アプリケーションの初期化
+let app;
+document.addEventListener('DOMContentLoaded', () => {
+    app = new SimpleTodoApp();
+});
