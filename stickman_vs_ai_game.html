@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>棒人間 vs AI バトル</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #0f0f23, #1a1a3a);
+            color: white;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        #gameContainer {
+            text-align: center;
+            position: relative;
+        }
+
+        canvas {
+            border: 2px solid #00ffff;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+            background: #000;
+        }
+
+        #ui {
+            margin-top: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 800px;
+        }
+
+        #health {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .health-bar {
+            width: 150px;
+            height: 20px;
+            border: 2px solid #fff;
+            background: #333;
+            position: relative;
+        }
+
+        .health-fill {
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+
+        .player-health { background: #00ff00; }
+        .ai-health { background: #ff0000; }
+
+        #controls {
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        #countdown {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 72px;
+            color: #00ffff;
+            text-shadow: 0 0 20px #00ffff;
+            z-index: 100;
+            display: none;
+            font-weight: bold;
+            animation: pulse 0.5s ease-in-out;
+        }
+
+        @keyframes pulse {
+            0% { transform: translate(-50%, -50%) scale(1.2); }
+            100% { transform: translate(-50%, -50%) scale(1); }
+        }
+
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 20px;
+            border: 2px solid #00ffff;
+            display: none;
+        }
+
+        button {
+            background: #00ffff;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            margin: 10px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="500"></canvas>
+        <div id="ui">
+            <div id="health">
+                <div>
+                    <div>プレイヤー</div>
+                    <div class="health-bar">
+                        <div class="health-fill player-health" id="playerHealth"></div>
+                    </div>
+                </div>
+                <div>
+                    <div>AI</div>
+                    <div class="health-bar">
+                        <div class="health-fill ai-health" id="aiHealth"></div>
+                    </div>
+                </div>
+            </div>
+            <div id="controls">
+                移動: WASD<br>
+                攻撃: J<br>
+                シールド: L<br>
+                爆弾: K
+            </div>
+        </div>
+        <div id="countdown"></div>
+        <div id="gameOver">
+            <h2 id="gameResult"></h2>
+            <button onclick="restartGame()">もう一度プレイ</button>
+            <div style="margin-top: 10px; font-size: 14px; color: #888;">
+                または Enterキー
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // ゲーム状態
+        let gameState = {
+            running: true,
+            time: 0,
+            countdown: 0,
+            countdownText: ''
+        };
+
+        // プレイヤー
+        const player = {
+            x: 100,
+            y: 250,
+            width: 20,
+            height: 40,
+            vx: 0,
+            vy: 0,
+            health: 100,
+            maxHealth: 100,
+            attackCooldown: 0,
+            shielding: false,
+            color: '#00ff00',
+            bombCount: 0,
+            bombCooldown: 0,
+            speedMultiplier: 1.0,
+            shieldHits: 0,
+            shieldCooldown: 0
+        };
+
+        // AI敵
+        const ai = {
+            x: 650,
+            y: 250,
+            width: 20,
+            height: 40,
+            vx: 0,
+            vy: 0,
+            health: 100,
+            maxHealth: 100,
+            attackCooldown: 0,
+            lastAttackTime: 0,
+            color: '#ff0000',
+            mode: 'patrol',
+            patrolDir: 1,
+            shielding: false,
+            shieldCooldown: 0,
+            speedMultiplier: 1.0,
+            shieldHits: 0,
+            aiShieldCooldown: 0
+        };
+
+        // 配列
+        let bullets = [];
+        let particles = [];
+        let bombs = [];
+        let items = [];
+        let itemSpawnTimes = [1200, 2400, 3600];
+        let itemsSpawned = 0;
+
+        // キー入力
+        const keys = {};
+
+        // イベントリスナー
+        document.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            
+            // Enterキーでゲーム再開
+            if (e.code === 'Enter' && !gameState.running && gameState.countdown === 0) {
+                restartGame();
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+        });
+
+        // 棒人間を描画
+        function drawStickman(x, y, color, shielding = false, shieldHits = 0) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            
+            // 頭
+            ctx.beginPath();
+            ctx.arc(x, y - 15, 8, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // 体
+            ctx.beginPath();
+            ctx.moveTo(x, y - 7);
+            ctx.lineTo(x, y + 15);
+            ctx.stroke();
+            
+            // 腕
+            ctx.beginPath();
+            ctx.moveTo(x - 10, y);
+            ctx.lineTo(x + 10, y);
+            ctx.stroke();
+            
+            // 脚
+            ctx.beginPath();
+            ctx.moveTo(x, y + 15);
+            ctx.lineTo(x - 8, y + 30);
+            ctx.moveTo(x, y + 15);
+            ctx.lineTo(x + 8, y + 30);
+            ctx.stroke();
+
+            // シールド - 耐久度で色を変える
+            if (shielding) {
+                let shieldColor = '#00ffff';
+                let shieldAlpha = 1.0;
+                
+                if (shieldHits === 1) {
+                    shieldColor = '#ffff00'; // 黄色（1回ヒット）
+                } else if (shieldHits === 2) {
+                    shieldColor = '#ff6600'; // オレンジ（2回ヒット）
+                    shieldAlpha = 0.8;
+                }
+                
+                ctx.strokeStyle = shieldColor;
+                ctx.lineWidth = 2;
+                ctx.globalAlpha = shieldAlpha;
+                ctx.beginPath();
+                ctx.arc(x, y, 25, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        // 弾丸を描画
+        function drawBullet(bullet) {
+            ctx.fillStyle = bullet.color;
+            ctx.fillRect(bullet.x - 2, bullet.y - 2, 4, 4);
+            
+            // 軌跡効果
+            ctx.fillStyle = bullet.color + '80';
+            ctx.fillRect(bullet.x - bullet.vx * 2, bullet.y - bullet.vy * 2, 2, 2);
+        }
+
+        // 爆弾を描画
+        function drawBomb(bomb) {
+            const alpha = bomb.blinking && bomb.timer < 60 ? 
+                (Math.sin(bomb.timer * 0.5) + 1) * 0.5 : 1;
+            
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = '#ffff00';
+            ctx.strokeStyle = '#ff8800';
+            ctx.lineWidth = 2;
+            
+            // 爆弾本体
+            ctx.beginPath();
+            ctx.arc(bomb.x, bomb.y, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            
+            // 導火線
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(bomb.x, bomb.y - 8);
+            ctx.lineTo(bomb.x - 3, bomb.y - 12);
+            ctx.stroke();
+            
+            ctx.globalAlpha = 1;
+        }
+
+        // アイテムを描画
+        function drawItem(item) {
+            // 回転するスピードアップアイテム
+            const rotation = gameState.time * 0.1;
+            ctx.save();
+            ctx.translate(item.x, item.y);
+            ctx.rotate(rotation);
+            
+            // 外側の円
+            ctx.strokeStyle = '#00ff88';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(0, 0, 15, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // 内側の矢印（スピードアップを表現）
+            ctx.fillStyle = '#00ff88';
+            ctx.beginPath();
+            ctx.moveTo(-8, 0);
+            ctx.lineTo(0, -8);
+            ctx.lineTo(8, 0);
+            ctx.lineTo(0, 8);
+            ctx.closePath();
+            ctx.fill();
+            
+            // 光る効果
+            ctx.strokeStyle = '#88ffaa';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(0, 0, 18, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+
+        // パーティクル効果
+        function createParticles(x, y, color, count = 8) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: (Math.random() - 0.5) * 10,
+                    life: 30,
+                    color: color
+                });
+            }
+        }
+
+        // 弾丸を作成
+        function createBullet(x, y, targetX, targetY, color) {
+            const dx = targetX - x;
+            const dy = targetY - y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const speed = 8;
+            
+            bullets.push({
+                x: x,
+                y: y,
+                vx: (dx / dist) * speed,
+                vy: (dy / dist) * speed,
+                color: color,
+                owner: color === player.color ? 'player' : 'ai'
+            });
+        }
+
+        // 爆弾を作成
+        function createBomb(x, y) {
+            if (player.bombCount >= 5) return;
+            
+            bombs.push({
+                x: x,
+                y: y,
+                timer: 180,
+                blinking: false,
+                owner: 'player'
+            });
+            player.bombCount++;
+        }
+
+        // 爆弾爆発
+        function explodeBomb(bomb) {
+            const explosionRadius = 35;
+            const damage = 21;
+            
+            // 爆発エフェクト
+            for (let i = 0; i < 20; i++) {
+                particles.push({
+                    x: bomb.x,
+                    y: bomb.y,
+                    vx: (Math.random() - 0.5) * 15,
+                    vy: (Math.random() - 0.5) * 15,
+                    life: 60,
+                    color: '#ff' + Math.floor(Math.random() * 256).toString(16).padStart(2, '0') + '00'
+                });
+            }
+            
+            // プレイヤーへのダメージチェック
+            const playerDist = Math.sqrt(
+                Math.pow(bomb.x - player.x, 2) + Math.pow(bomb.y - player.y, 2)
+            );
+            if (playerDist <= explosionRadius && !player.shielding) {
+                player.health = Math.max(0, player.health - damage);
+                createParticles(player.x, player.y, '#00ff00', 15);
+                console.log('Player hit by bomb! Player health:', player.health);
+            }
+            
+            // AIへのダメージチェック
+            const aiDist = Math.sqrt(
+                Math.pow(bomb.x - ai.x, 2) + Math.pow(bomb.y - ai.y, 2)
+            );
+            if (aiDist <= explosionRadius && !ai.shielding) {
+                ai.health = Math.max(0, ai.health - damage);
+                createParticles(ai.x, ai.y, '#ff0000', 15);
+                console.log('AI hit by bomb! AI health:', ai.health);
+            }
+            
+            player.bombCount--;
+        }
+
+        // アイテム生成
+        function spawnSpeedItem() {
+            if (itemsSpawned >= 3) return;
+            
+            items.push({
+                x: canvas.width / 2,
+                y: canvas.height / 2,
+                type: 'speed',
+                collected: false
+            });
+            itemsSpawned++;
+            console.log('Speed item spawned!', itemsSpawned, '/3');
+        }
+
+        // アイテム取得チェック
+        function checkItemCollection() {
+            for (let i = items.length - 1; i >= 0; i--) {
+                const item = items[i];
+                if (item.collected) continue;
+                
+                // プレイヤーとの衝突チェック
+                const playerDist = Math.sqrt(
+                    Math.pow(item.x - player.x, 2) + Math.pow(item.y - player.y, 2)
+                );
+                if (playerDist < 20) {
+                    player.speedMultiplier *= 1.25;
+                    createParticles(item.x, item.y, '#00ff88', 12);
+                    items.splice(i, 1);
+                    console.log('Player got speed item! Speed:', player.speedMultiplier);
+                    continue;
+                }
+                
+                // AIとの衝突チェック
+                const aiDist = Math.sqrt(
+                    Math.pow(item.x - ai.x, 2) + Math.pow(item.y - ai.y, 2)
+                );
+                if (aiDist < 20) {
+                    ai.speedMultiplier *= 1.25;
+                    createParticles(item.x, item.y, '#ff8888', 12);
+                    items.splice(i, 1);
+                    console.log('AI got speed item! Speed:', ai.speedMultiplier);
+                    continue;
+                }
+            }
+        }
+
+        // 衝突判定
+        function checkCollision(rect1, rect2) {
+            return rect1.x < rect2.x + rect2.width &&
+                   rect1.x + rect1.width > rect2.x &&
+                   rect1.y < rect2.y + rect2.height &&
+                   rect1.y + rect1.height > rect2.y;
+        }
+
+        // プレイヤー更新
+        function updatePlayer() {
+            // 移動 - スピード倍率を適用
+            let speed = 3 * player.speedMultiplier;
+            if (keys['KeyA']) player.vx = -speed;
+            else if (keys['KeyD']) player.vx = speed;
+            else player.vx *= 0.8;
+
+            if (keys['KeyW']) player.vy = -speed;
+            else if (keys['KeyS']) player.vy = speed;
+            else player.vy *= 0.8;
+
+            player.x += player.vx;
+            player.y += player.vy;
+
+            // 画面境界
+            player.x = Math.max(10, Math.min(canvas.width - 30, player.x));
+            player.y = Math.max(30, Math.min(canvas.height - 30, player.y));
+
+            // シールド - クールダウン中は使用不可
+            if (keys['KeyL'] && player.shieldCooldown <= 0) {
+                player.shielding = true;
+            } else {
+                player.shielding = false;
+            }
+
+            // 攻撃 - シールド中は撃てない
+            if (keys['KeyJ'] && player.attackCooldown <= 0 && !player.shielding) {
+                createBullet(player.x, player.y, ai.x, ai.y, player.color);
+                player.attackCooldown = 20;
+            }
+
+            // 爆弾設置 - 0.5秒のクールダウン付き
+            if (keys['KeyK'] && player.bombCount < 5 && player.bombCooldown <= 0) {
+                createBomb(player.x, player.y);
+                player.bombCooldown = 30;
+            }
+
+            // クールダウン減少
+            if (player.attackCooldown > 0) player.attackCooldown--;
+            if (player.bombCooldown > 0) player.bombCooldown--;
+            if (player.shieldCooldown > 0) player.shieldCooldown--;
+        }
+
+        // AI更新
+        function updateAI() {
+            const distToPlayer = Math.sqrt(
+                Math.pow(player.x - ai.x, 2) + Math.pow(player.y - ai.y, 2)
+            );
+
+            // アイテムとの距離をチェック - アイテム優先
+            let nearestItem = null;
+            let nearestItemDist = Infinity;
+            items.forEach(item => {
+                const itemDist = Math.sqrt(
+                    Math.pow(item.x - ai.x, 2) + Math.pow(item.y - ai.y, 2)
+                );
+                if (itemDist < nearestItemDist) {
+                    nearestItemDist = itemDist;
+                    nearestItem = item;
+                }
+            });
+
+            // プレイヤーの弾との距離をチェックしてシールド判定
+            let shouldShield = false;
+            if (ai.aiShieldCooldown <= 0) {
+                bullets.forEach(bullet => {
+                    if (bullet.owner === 'player') {
+                        const bulletDistToAI = Math.sqrt(
+                            Math.pow(bullet.x - ai.x, 2) + Math.pow(bullet.y - ai.y, 2)
+                        );
+                        if (bulletDistToAI < 80) {
+                            const bulletDx = bullet.vx;
+                            const bulletDy = bullet.vy;
+                            const aiDx = ai.x - bullet.x;
+                            const aiDy = ai.y - bullet.y;
+                            if (bulletDx * aiDx + bulletDy * aiDy > 0) {
+                                shouldShield = true;
+                            }
+                        }
+                    }
+                });
+            }
+
+            ai.shielding = shouldShield;
+
+            // AIの行動判定 - アイテムは低優先度
+            if (distToPlayer < 400) {
+                ai.mode = 'attack';
+            } else if (distToPlayer < 500) {
+                ai.mode = 'chase';
+            } else if (nearestItem && nearestItemDist < 200) {
+                ai.mode = 'get_item'; // 近くにある時だけ取りに行く
+            } else {
+                ai.mode = 'aggressive_patrol';
+            }
+
+            // 行動実行
+            switch (ai.mode) {
+                case 'get_item':
+                    // アイテムに向かう（戦闘より低優先度）
+                    const itemX = nearestItem.x - ai.x;
+                    const itemY = nearestItem.y - ai.y;
+                    const itemDist = Math.sqrt(itemX * itemX + itemY * itemY);
+                    ai.vx = (itemX / itemDist) * 2 * ai.speedMultiplier; // 速度を控えめに
+                    ai.vy = (itemY / itemDist) * 2 * ai.speedMultiplier;
+                    break;
+                    
+                case 'aggressive_patrol':
+                    const dx = player.x - ai.x;
+                    const dy = player.y - ai.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    ai.vx = (dx / dist) * 1.5 * ai.speedMultiplier;
+                    ai.vy = (dy / dist) * 1.5 * ai.speedMultiplier;
+                    
+                    if (ai.attackCooldown <= 0 && Math.random() < 0.015 && !ai.shielding) {
+                        createBullet(ai.x, ai.y, player.x, player.y, ai.color);
+                        ai.attackCooldown = 60;
+                    }
+                    break;
+                    
+                case 'chase':
+                    const chaseX = player.x - ai.x;
+                    const chaseY = player.y - ai.y;
+                    const chaseDist = Math.sqrt(chaseX * chaseX + chaseY * chaseY);
+                    ai.vx = (chaseX / chaseDist) * 3 * ai.speedMultiplier;
+                    ai.vy = (chaseY / chaseDist) * 3 * ai.speedMultiplier;
+                    
+                    if (ai.attackCooldown <= 0 && Math.random() < 0.04 && !ai.shielding) {
+                        createBullet(ai.x, ai.y, player.x, player.y, ai.color);
+                        ai.attackCooldown = 45;
+                    }
+                    break;
+                    
+                case 'attack':
+                    const attackX = player.x - ai.x;
+                    const attackY = player.y - ai.y;
+                    const attackDist = Math.sqrt(attackX * attackX + attackY * attackY);
+                    
+                    ai.vx = (attackX / attackDist) * 1.5 * ai.speedMultiplier + Math.sin(gameState.time * 0.1) * 2;
+                    ai.vy = (attackY / attackDist) * 1.5 * ai.speedMultiplier + Math.cos(gameState.time * 0.1) * 2;
+                    
+                    if (ai.attackCooldown <= 0 && !ai.shielding) {
+                        const predictX = player.x + player.vx * 3;
+                        const predictY = player.y + player.vy * 3;
+                        createBullet(ai.x, ai.y, predictX, predictY, ai.color);
+                        ai.attackCooldown = 35;
+                        
+                        if (Math.random() < 0.2) {
+                            setTimeout(() => {
+                                if (gameState.running && !ai.shielding) {
+                                    createBullet(ai.x, ai.y, player.x, player.y, ai.color);
+                                }
+                            }, 200);
+                        }
+                    }
+                    break;
+            }
+
+            ai.x += ai.vx;
+            ai.y += ai.vy;
+
+            ai.x = Math.max(30, Math.min(canvas.width - 30, ai.x));
+            ai.y = Math.max(30, Math.min(canvas.height - 30, ai.y));
+
+            if (ai.attackCooldown > 0) ai.attackCooldown--;
+            if (ai.shieldCooldown > 0) ai.shieldCooldown--;
+            if (ai.aiShieldCooldown > 0) ai.aiShieldCooldown--;
+        }
+
+        // 弾丸更新
+        function updateBullets() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const bullet = bullets[i];
+                
+                bullet.x += bullet.vx;
+                bullet.y += bullet.vy;
+                
+                if (bullet.x < 0 || bullet.x > canvas.width || 
+                    bullet.y < 0 || bullet.y > canvas.height) {
+                    bullets.splice(i, 1);
+                    continue;
+                }
+                
+                if (bullet.owner === 'player') {
+                    const aiHitbox = {x: ai.x - 15, y: ai.y - 25, width: 30, height: 45};
+                    const bulletHitbox = {x: bullet.x - 3, y: bullet.y - 3, width: 6, height: 6};
+                    if (checkCollision(bulletHitbox, aiHitbox)) {
+                        if (!ai.shielding) {
+                            ai.health = Math.max(0, ai.health - 7);
+                            createParticles(ai.x, ai.y, '#ff0000');
+                            console.log('AI hit! AI health:', ai.health);
+                        } else {
+                            // シールドにヒット - 耐久度減少
+                            ai.shieldHits++;
+                            createParticles(ai.x, ai.y, '#00ffff');
+                            console.log('AI shield hit!', ai.shieldHits, '/3');
+                            
+                            // 3回ヒットでシールド破壊
+                            if (ai.shieldHits >= 3) {
+                                ai.shielding = false;
+                                ai.shieldHits = 0;
+                                ai.aiShieldCooldown = 180; // 3秒クールダウン
+                                createParticles(ai.x, ai.y, '#ff8800', 15); // 破壊エフェクト
+                                console.log('AI shield destroyed! 3 second cooldown');
+                            }
+                        }
+                        bullets.splice(i, 1);
+                    }
+                } else {
+                    const playerHitbox = {x: player.x - 15, y: player.y - 25, width: 30, height: 45};
+                    const bulletHitbox = {x: bullet.x - 3, y: bullet.y - 3, width: 6, height: 6};
+                    if (checkCollision(bulletHitbox, playerHitbox)) {
+                        if (!player.shielding) {
+                            player.health = Math.max(0, player.health - 8); // 15から8に削減（約半分）
+                            createParticles(player.x, player.y, '#00ff00');
+                            console.log('Player hit! Player health:', player.health);
+                        } else {
+                            // シールドにヒット - 耐久度減少
+                            player.shieldHits++;
+                            createParticles(player.x, player.y, '#00ffff');
+                            console.log('Player shield hit!', player.shieldHits, '/3');
+                            
+                            // 3回ヒットでシールド破壊
+                            if (player.shieldHits >= 3) {
+                                player.shielding = false;
+                                player.shieldHits = 0;
+                                player.shieldCooldown = 180; // 3秒クールダウン
+                                createParticles(player.x, player.y, '#ff8800', 15); // 破壊エフェクト
+                                console.log('Player shield destroyed! 3 second cooldown');
+                            }
+                        }
+                        bullets.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        // パーティクル更新
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vx *= 0.95;
+                p.vy *= 0.95;
+                p.life--;
+                
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        // 爆弾更新
+        function updateBombs() {
+            for (let i = bombs.length - 1; i >= 0; i--) {
+                const bomb = bombs[i];
+                bomb.timer--;
+                
+                if (bomb.timer < 60) {
+                    bomb.blinking = true;
+                }
+                
+                if (bomb.timer <= 0) {
+                    explodeBomb(bomb);
+                    bombs.splice(i, 1);
+                }
+            }
+        }
+
+        // UI更新
+        function updateUI() {
+            document.getElementById('playerHealth').style.width = 
+                (player.health / player.maxHealth * 100) + '%';
+            document.getElementById('aiHealth').style.width = 
+                (ai.health / ai.maxHealth * 100) + '%';
+        }
+
+        // ゲーム終了チェック
+        function checkGameEnd() {
+            if (player.health <= 0) {
+                document.getElementById('gameResult').textContent = 'AI の勝利！';
+                document.getElementById('gameOver').style.display = 'block';
+                gameState.running = false;
+            } else if (ai.health <= 0) {
+                document.getElementById('gameResult').textContent = 'あなたの勝利！';
+                document.getElementById('gameOver').style.display = 'block';
+                gameState.running = false;
+            }
+        }
+
+        // カウントダウン開始
+        function startCountdown() {
+            gameState.running = false;
+            gameState.countdown = 180;
+            gameState.countdownText = '3';
+            document.getElementById('countdown').style.display = 'block';
+            document.getElementById('countdown').textContent = '3';
+        }
+
+        // カウントダウン更新
+        function updateCountdown() {
+            if (gameState.countdown > 0) {
+                gameState.countdown--;
+                
+                if (gameState.countdown > 120) {
+                    gameState.countdownText = '3';
+                } else if (gameState.countdown > 60) {
+                    gameState.countdownText = '2';
+                } else if (gameState.countdown > 0) {
+                    gameState.countdownText = '1';
+                } else {
+                    gameState.countdownText = 'START!';
+                }
+                
+                document.getElementById('countdown').textContent = gameState.countdownText;
+                
+                if (gameState.countdown === 0) {
+                    setTimeout(() => {
+                        document.getElementById('countdown').style.display = 'none';
+                        gameState.running = true;
+                    }, 500);
+                }
+            }
+        }
+
+        // ゲームリスタート
+        function restartGame() {
+            player.health = player.maxHealth;
+            ai.health = ai.maxHealth;
+            player.x = 100;
+            player.y = 250;
+            ai.x = 650;
+            ai.y = 250;
+            player.vx = 0;
+            player.vy = 0;
+            player.bombCount = 0;
+            player.bombCooldown = 0;
+            player.speedMultiplier = 1.0;
+            player.shieldHits = 0;
+            player.shieldCooldown = 0;
+            ai.vx = 0;
+            ai.vy = 0;
+            ai.shielding = false;
+            ai.shieldCooldown = 0;
+            ai.speedMultiplier = 1.0;
+            ai.shieldHits = 0;
+            ai.aiShieldCooldown = 0;
+            bullets = [];
+            particles = [];
+            bombs = [];
+            items = [];
+            itemsSpawned = 0;
+            gameState.time = 0;
+            document.getElementById('gameOver').style.display = 'none';
+            startCountdown();
+        }
+
+        // メインゲームループ
+        function gameLoop() {
+            // 画面クリア
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // 背景グリッド
+            ctx.strokeStyle = '#111';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < canvas.width; x += 50) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += 50) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+
+            // カウントダウン更新
+            updateCountdown();
+
+            if (gameState.running) {
+                // アイテム生成チェック
+                for (let i = 0; i < itemSpawnTimes.length; i++) {
+                    if (gameState.time === itemSpawnTimes[i] && itemsSpawned === i) {
+                        spawnSpeedItem();
+                    }
+                }
+                
+                // 更新
+                updatePlayer();
+                updateAI();
+                updateBullets();
+                updateParticles();
+                updateBombs();
+                checkItemCollection();
+                
+                // ゲーム終了チェック
+                checkGameEnd();
+            }
+
+            // 描画
+            drawStickman(player.x, player.y, player.color, player.shielding, player.shieldHits);
+            drawStickman(ai.x, ai.y, ai.color, ai.shielding, ai.shieldHits);
+            
+            bullets.forEach(drawBullet);
+            bombs.forEach(drawBomb);
+            items.forEach(drawItem);
+            
+            // パーティクル描画
+            particles.forEach(p => {
+                ctx.fillStyle = p.color + Math.floor(p.life / 30 * 255).toString(16).padStart(2, '0');
+                ctx.fillRect(p.x, p.y, 2, 2);
+            });
+
+            // UI更新
+            updateUI();
+            
+            gameState.time++;
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ゲーム開始
+        startCountdown();
+        gameLoop();
+    </script>
+</body>
+</html>
